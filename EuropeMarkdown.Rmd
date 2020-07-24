@@ -1,0 +1,354 @@
+---
+title: "Europe Final Energy Consumption by Product"
+author: "Alejandra Enriquez-Ibanez Ertl"
+date: "7/24/2020"
+output: html_document
+---
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE)
+
+
+
+```
+
+#Panel data
+Here is the code to reshape the database of Final Eenrgy Consumption of eurostat.
+My first intention is to marge all sheets of the excel document in order to transform it into a panel format and then reshape it to be able to map it in an interactive map. 
+
+```{r panel, echo=FALSE}
+rm(list=ls())
+
+library(readxl)
+TEN001231594211625077 <- read_excel("TEN001231594211625077.xlsx", sheet = "Sheet 1", range = "A10:y56")
+ 
+ library(janitor)
+ TEN001231594211625077<- remove_empty(TEN001231594211625077, which = c("cols"), quiet = TRUE)
+ 
+countrycode = as.vector(TEN001231594211625077[2:46,1])
+
+countrycode=as.vector(unlist(countrycode))
+
+country_panel = c()
+for (i in 1:45){
+  x=rep(countrycode[i],12)
+  country_panel=append(country_panel, x)
+}
+
+years_panel <- rep(2007:2018,45)
+
+#finalenergyconsumptionbyproduct TEN00123
+TEN00123_panel = c()
+for (i in 2:46){
+  x=TEN001231594211625077[i,]
+  x=x[-c(1)]
+  x=t(x)
+  TEN00123_panel = rbind(TEN00123_panel,x)
+}
+
+df_total=cbind(country_panel,years_panel,TEN00123_panel)
+
+
+#####
+
+energy=c("FossilFuels","ManufacturedGases","Peat&PeatProducts","OilShale","NaturalGas","Oil&PetroleumProducts","Renewables&Biofuels",
+         "Non-RenewableWaste","Electricity","Heat")
+sheets<-c("Sheet 2","Sheet 3","Sheet 4","Sheet 5","Sheet 6","Sheet 7","Sheet 8","Sheet 9","Sheet 10","Sheet 11")
+
+
+for (i in energy){
+  for (j in length(sheets)){
+  i<-read_excel("TEN001231594211625077.xlsx", sheet = sheets[j], range = "A10:y56")
+  i<- remove_empty(i, which = c( "cols"), quiet = TRUE)
+  
+  panel <-c() 
+  for (m in 2:46){
+    x=i[m,]
+    x=x[-c(1)]
+    x=t(x)
+    panel = rbind(panel,x)
+  
+  }
+  df_total <- cbind(df_total,panel)
+  }
+}
+
+#labeling 
+colnames(df_total)<-c("country", "year","TotalBOE","FossilFuels","ManufacturedGases","Peat&PeatProducts","OilShale","NaturalGas","Oil&PetroleumProducts","Renewables&Biofuels",
+                   "Non-RenewableWaste","Electricity","Heat")
+
+library(openxlsx)
+write.xlsx(df_total,file="EurostatEnergy.xlsx",row.names = FALSE)
+
+
+```
+
+## Reshaping of the panel data and merging it with the coordinates database
+Here I first call the world map data  base, but since I only want to map Europe I need to select the names of my energy data.
+This can be a very tricky step because sometime the names of one database do not fully match the other f.e. United Kingdom in one and United Kingdom of the Great Britain and Northern Ireland in the other, or Czechia instead of Czech Republic. So, sometimes there might be some manual changes before trying to merge. It is also a matter of what works better for the databases you are trying to merge. In my case I also played with the ISO3 of Kosovo after merging.
+
+```{r reshape, echo=FALSE}
+library(scales)
+library(dplyr)
+library(maps)
+library(ggplot2)
+library(readxl)
+world_data <- ggplot2::map_data('world')
+world_data <- fortify(world_data)
+
+library(magrittr)
+library(rvest)
+url <- "https://www.nationsonline.org/oneworld/country_code_list.htm"
+iso_codes <- url %>%
+  read_html() %>%
+  html_nodes(xpath = '//*[@id="CountryCode"]') %>%
+  html_table()
+iso_codes <- iso_codes[[1]][, -1]
+iso_codes <- iso_codes[!apply(iso_codes, 1, function(x){all(x == x[1])}), ]
+names(iso_codes) <- c("Country", "ISO2", "ISO3", "UN")
+
+iso_codes[ iso_codes == "United Kingdom"] <- "UK"
+iso_codes[ iso_codes == "Macedonia, Republic of"] <- "Macedonia"
+
+
+#TEN001231594211625077 <- read_excel("helper/TEN001231594211625077.xlsx", sheet = "Sheet 1", range = "a15:a56", col_names = FALSE)
+TEN001231594211625077 <- read_excel("TEN001231594211625077.xlsx", sheet = "Sheet 1", range = "a15:a56", col_names = FALSE)
+
+
+nombres<-as.vector(unlist(TEN001231594211625077[1:42,1]))
+
+europe <- map_data("world", region = nombres)
+europe<- fortify(europe)
+
+
+europe["ISO3"] <- iso_codes$ISO3[match(europe$region, iso_codes$Country)]
+
+europe$ISO3[europe$region=="Kosovo"] <- "RKS"
+
+#EurostatEnergy <- read_excel("helper/EurostatEnergy1.xlsx", sheet = "Data")
+EurostatEnergy <- read_excel("EurostatEnergy1.xlsx", sheet = "Data")
+
+
+library(reshape2)
+energy_melt <- melt(EurostatEnergy, id = c("ISO3", "country", "year"), 
+                          variable.name = "Indicator", value.name = "Value")
+energy_melt <- na.omit(energy_melt)
+
+energy_melt[] <- lapply(energy_melt, as.character)
+energy_melt$Value <- as.numeric(energy_melt$Value)
+energy_melt$Value <- energy_melt$Value/1000000
+
+library(openxlsx)
+write.xlsx(energy_melt,file="energyreshaped.xlsx",row.names = TRUE)
+
+```
+
+#Function to Map
+
+Here is the code of the function needed to later use in the server of the app.
+At the end you can see the map. This is just a proof that it is working and how it should look. Of course here it is not interactive yet.
+
+```{r Function}
+
+library(ggthemes)
+
+prueba<- function(df, map_data, period, indicator){
+  
+  # Function for setting the aesthetics of the plot
+  my_theme <- function () { 
+    theme_map() + theme(axis.text = element_text(size = 5),
+                        axis.text.x = element_blank(),
+                        axis.text.y = element_blank(),
+                       axis.title = element_text(size = 5),
+                       strip.text = element_text(size = 5),
+                       panel.grid.major = element_blank(), 
+                       panel.grid.minor = element_blank(),
+                       panel.background = element_blank(), 
+                       panel.border = element_blank(),
+                       #legend.position = "bottom",
+                       legend.title = element_text(face = 'bold',size=7, color = "Orange"),
+                       legend.title.align = 0.5,
+                       #legend.key.width = unit(3,"cm"),
+                       legend.key.size = unit(0.5, "cm"),
+                       strip.background = element_rect(fill = 'white', colour = 'white'))
+  }
+  
+  # Select only the data that the user has selected to view
+  plotdf <- df[df$Indicator == indicator & df$year == period,]
+  #plotdf <- plotdf[!is.na(plotdf$ISO3), ]
+  
+  # Add the data the user wants to see to the geographical world data
+  map_data['Period'] <- rep(period, nrow(map_data))
+  map_data['Indicator'] <- rep(indicator, nrow(map_data))
+  map_data['Value'] <- plotdf$Value[match(map_data$ISO3, plotdf$ISO3)]
+  
+  # Create caption with the data source to show underneath the map
+ # capt <- paste0("Source: eurostat", 
+  #               sep = "\n" , "Final Energy Consumption by Product")
+  # Specify the plot for the world map
+  library(RColorBrewer)
+  library(ggiraph)
+  g <- ggplot() + 
+    geom_polygon_interactive(data = subset(map_data, lat >= -60 & lat <= 90), color = 'gray70', size = 0.1,
+                             aes(x =long, y = lat, fill = Value, group = group, 
+                                 tooltip = sprintf("%s<br/>%s", region , Value))) +
+    scale_fill_gradientn(colours = brewer.pal(5, "Oranges"), na.value = 'white') +
+    scale_color_gradientn(colours = brewer.pal(5, "Oranges"), labels=comma) +
+    labs(fill =  "Mtoe" , color = map_data$Value,
+         title = NULL , x = NULL, y = NULL) +
+    my_theme()
+  
+  return(g)
+  
+  
+}
+i<-"TotalBOE"
+p<-"2010"
+prueba(energy_melt,europe,p,i)
+
+
+```
+#shiny App
+
+Here is finally the Shiny App.
+I all added a simple converter in case the user want to know for example how much Barrels of Oil Equivalent of Electricity equal in Megawatt or the same for natural gas in british termal units.
+
+
+```{r}
+library(shiny)
+library(ggiraph)
+library(shinydashboard)
+
+
+#source("helper/interactiveMAP.R")
+
+
+# Define the UI
+ui = dashboardPage (
+    
+    # App title
+    
+    dashboardHeader( title = tags$strong("Final Energy Consumption by Product"),
+                     titleWidth = 400,
+                     disable = F),
+    
+    dashboardSidebar(width = 400, 
+                     disable = F,
+                     collapsed = F,
+                     
+                     
+                     tags$head( 
+                         tags$style(HTML(".main-sidebar { font-size: 15px; }")) 
+                     ),
+                     
+                     
+                     
+                     tabsetPanel(
+                         
+                         tabPanel( "Product",      
+                                   
+                                   # First input: Type of data
+                                   selectInput(inputId = "Indicator",
+                                               label = "Choose the fuel you want to see:",
+                                               choices = list(
+                                                   "Total BOE"="TotalBOE","Fossil Fuels"="FossilFuels", 
+                                                   "Manufactured Gases"="ManufacturedGases", "Peat & Peat Products"="Peat&PeatProducts",
+                                                   "Shale Oil"="OilShale", "Natural Gas"="NaturalGas","Oil & Petroleum Products"="Oil&PetroleumProducts",
+                                                   "Renewables & Biofuels"="Renewables&Biofuels", "Non-Renewable Waste"="Non-RenewableWaste",
+                                                   "Electricity"="Electricity","Heat"="Heat")),
+                                   
+                                   
+                                   selectInput(inputId = "period",
+                                               label = "Choose the period for which you want to see the data:",
+                                               choices = list(
+                                                   "2007"="2007","2008"="2008", 
+                                                   "2009"="2009", "2010"="2010",
+                                                   "2011"="2011", "2012"="2012","2013"="2013",
+                                                   "2014"="2014","2015"="2015","2016"="2016",
+                                                   "2017"="2017","2018"="2018")),
+                                   
+                         ),
+                         tabPanel("Mtoe Converter",
+                                  
+                                  selectInput("unit","The unit you want to convert to:",
+                                              c("Mtoe","Petajoule (PJ)","Petacalorie (Pcal)","trillion british termal units (TBtu)","terawatt-hours (TWh)","thousand tonnes of coal equivalent (ktoe)"),
+                                              selected = "Mtoe"),
+                                  numericInput("valor","The value you want to convert:",value=1),
+                                  h5(textOutput("text1"))
+                         ))
+                     
+    ),
+    
+    # Main panel for displaying outputs
+    dashboardBody(
+        
+        
+        # Hide errors
+        tags$style(type = "text/css",
+                   ".shiny-output-error { visibility: hidden; }",
+                   ".shiny-output-error:before { visibility: hidden; }"),
+        
+        
+        box(
+            title = "in Million tonnes of oil equivalent (Mtoe)",
+            # Output: interactive world map
+            status = "primary",height = "800px", width = "1000px",
+            solidHeader = T,
+            align = "left",
+            column( 10 ,align="center" ,girafeOutput("distPlot", width = "125%", height="700px"))),
+        
+        
+        h5("Source: Eurostat. Final Energy Consumption by Product."),
+        tags$a(
+            href="https://ec.europa.eu/eurostat/web/products-datasets/-/ten00123", 
+            tags$img(src="Eurostat_Newlogo.png", 
+                     title="Link to the data",
+                     style="left",
+                     width="120",
+                     height="40"),
+            
+            h5("Done by: Alejandra Enriquez-Ibanez Ertl")    
+            
+            
+        ),
+        
+        
+    )
+)
+
+
+
+
+# Define the server
+server = function(input, output) {
+    
+    # Create the interactive world map
+    output$distPlot <- renderGirafe({
+        ggiraph(code = print(prueba( df= energy_melt, map_data = europe, period = input$period, indicator = input$Indicator)))
+    })
+    
+    
+    output$text1 = renderText({
+        u<- input$unit;
+        va<- input$valor;
+        out <- 1;
+        if (u=="Mtoe"){out<- round(va*1)
+        }else if(u == "Petajoule (PJ"){out <- round(va*41.868)
+        }else if(u == "Petacalorie (Pcal)" ){out<- round(va*10.0067)
+        }else if(u == "trillion british termal units (TBtu)"){out<- round(va*39.6831)
+        }else if(u == "terawatt-hours (TWh)"){ out<- round(va*11.63)
+        }else if(u == "thousand tonnes of coal equivalent (ktoe)"){ out<- round(va*1428.5714)
+        }
+        paste(va, " ", "Mtoe"," = ",out, " ", u)
+    })
+}
+
+# Finally, we can run our app by either clicking "Run App" in the top of our RStudio IDE, or by running
+shinyApp(ui = ui, server = server)
+
+```
+
+
+
+
+
