@@ -16,7 +16,7 @@ knitr::opts_chunk$set(echo = TRUE)
 Here is the code to reshape the database of Final Eenrgy Consumption of eurostat.
 My first intention is to marge all sheets of the excel document in order to transform it into a panel format and then reshape it to be able to map it in an interactive map. 
 
-```{r panel, echo=FALSE}
+```{r panel}
 rm(list=ls())
 
 library(readxl)
@@ -39,6 +39,7 @@ years_panel <- rep(2007:2018,45)
 
 #finalenergyconsumptionbyproduct TEN00123
 TEN00123_panel = c()
+
 for (i in 2:46){
   x=TEN001231594211625077[i,]
   x=x[-c(1)]
@@ -55,23 +56,24 @@ energy=c("FossilFuels","ManufacturedGases","Peat&PeatProducts","OilShale","Natur
          "Non-RenewableWaste","Electricity","Heat")
 sheets<-c("Sheet 2","Sheet 3","Sheet 4","Sheet 5","Sheet 6","Sheet 7","Sheet 8","Sheet 9","Sheet 10","Sheet 11")
 
-
-for (i in energy){
-  for (j in length(sheets)){
+ 
+  for (j in seq_along(sheets)){
   i<-read_excel("TEN001231594211625077.xlsx", sheet = sheets[j], range = "A10:y56")
   i<- remove_empty(i, which = c( "cols"), quiet = TRUE)
   
-  panel <-c() 
-  for (m in 2:46){
-    x=i[m,]
-    x=x[-c(1)]
-    x=t(x)
-    panel = rbind(panel,x)
-  
-  }
+    panel <-c() 
+    for (m in 2:46){
+      x=i[m,]
+      x=x[-c(1)]
+      x=t(x)
+      panel = rbind(panel,x)
+    }
+    
+    
   df_total <- cbind(df_total,panel)
   }
-}
+  
+
 
 #labeling 
 colnames(df_total)<-c("country", "year","TotalBOE","FossilFuels","ManufacturedGases","Peat&PeatProducts","OilShale","NaturalGas","Oil&PetroleumProducts","Renewables&Biofuels",
@@ -87,7 +89,7 @@ write.xlsx(df_total,file="EurostatEnergy.xlsx",row.names = FALSE)
 Here I first call the world map data  base, but since I only want to map Europe I need to select the names of my energy data.
 This can be a very tricky step because sometime the names of one database do not fully match the other f.e. United Kingdom in one and United Kingdom of the Great Britain and Northern Ireland in the other, or Czechia instead of Czech Republic. So, sometimes there might be some manual changes before trying to merge. It is also a matter of what works better for the databases you are trying to merge. In my case I also played with the ISO3 of Kosovo after merging.
 
-```{r reshape, echo=FALSE}
+```{r reshape }
 library(scales)
 library(dplyr)
 library(maps)
@@ -125,8 +127,7 @@ europe["ISO3"] <- iso_codes$ISO3[match(europe$region, iso_codes$Country)]
 
 europe$ISO3[europe$region=="Kosovo"] <- "RKS"
 
-#EurostatEnergy <- read_excel("helper/EurostatEnergy1.xlsx", sheet = "Data")
-EurostatEnergy <- read_excel("EurostatEnergy1.xlsx", sheet = "Data")
+EurostatEnergy <- read_excel("EurostatEnergy1.xlsx")
 
 
 library(reshape2)
